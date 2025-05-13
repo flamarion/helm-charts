@@ -28,17 +28,17 @@ Feel free to open an issue or submit a pull request.
 
 ## 📜 License
 
-This repository is licensed under the **Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)** license.
+Shield: [![CC BY-ND 4.0][cc-by-nd-shield]][cc-by-nd]
 
-You are free to:
-- **Share** — copy and redistribute the material
-- **Adapt** — remix, transform, and build upon the material
+This work is licensed under a
+[Creative Commons Attribution-NoDerivs 4.0 International License][cc-by-nd].
 
-**As long as you:**
-- **Give appropriate credit**
-- **Do not use the material for commercial purposes**
+[![CC BY-ND 4.0][cc-by-nd-image]][cc-by-nd]
 
-See the [LICENSE](LICENSE) file for the full license text.
+[cc-by-nd]: https://creativecommons.org/licenses/by-nd/4.0/
+[cc-by-nd-image]: https://licensebuttons.net/l/by-nd/4.0/88x31.png
+[cc-by-nd-shield]: https://img.shields.io/badge/License-CC%20BY--ND%204.0-lightgrey.svg
+
 
 ## 🙏 Thanks
 
