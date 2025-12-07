@@ -1,0 +1,245 @@
+{{- if .Values.backup.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.fullname" . }}-backup-script
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+data:
+  backup.sh: |-
+    #!/bin/bash
+    set -e
+
+    # Configuration
+    # Use FQDN for first replica specifically, to ensure we only backup one node
+    CLICKHOUSE_HOST="{{ include "clickhouse.serverName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+    CLICKHOUSE_PORT="{{ .Values.clickhouse.service.ports.tcp }}"
+    CLICKHOUSE_USER="{{ .Values.auth.username }}"
+    CLICKHOUSE_PASSWORD="{{ .Values.auth.password }}"
+    BACKUP_DIR="{{ .Values.backup.backupDirectory }}"
+    BACKUP_NAME="backup-$(date +%Y%m%d-%H%M%S).zip"
+    RETENTION_DAYS={{ .Values.backup.retentionDays }}
+    COMPRESSION="{{ .Values.backup.parameters.compression }}"
+    COMPRESSION_LEVEL={{ .Values.backup.parameters.compressionLevel }}
+
+    # Define databases to exclude
+    {{- if .Values.backup.excludeDatabases }}
+    # Add excluded databases from values
+    EXCLUDE_DATABASES=(
+      {{- range .Values.backup.excludeDatabases }}
+      "{{ . }}"
+      {{- end }}
+    )
+    {{- else }}
+    # No excluded databases
+    EXCLUDE_DATABASES=()
+    {{- end }}
+
+    # Add some additional debugging
+    echo "Starting ClickHouse backup with the following configuration:"
+    echo "- ClickHouse Host: $CLICKHOUSE_HOST"
+    echo "- ClickHouse Port: $CLICKHOUSE_PORT"
+    echo "- ClickHouse User: $CLICKHOUSE_USER"
+    echo "- Backup Directory: $BACKUP_DIR"
+    echo "- Backup Name: $BACKUP_NAME"
+    echo "- Compression: $COMPRESSION level $COMPRESSION_LEVEL"
+    echo "- Retention Days: $RETENTION_DAYS"
+    
+    # Show excluded databases if any
+    if [ ${#EXCLUDE_DATABASES[@]} -gt 0 ]; then
+      echo "- Excluding databases: ${EXCLUDE_DATABASES[*]}"
+    else
+      echo "- Backing up all databases (no exclusions)"
+    fi
+    
+    # Simple DNS check using built-in bash networking
+    check_host() {
+      local host=$1
+      if [[ -x "$(command -v host)" ]]; then
+        # If host command exists
+        host "$host" > /dev/null 2>&1 && echo "DNS resolution successful for $host" || echo "DNS resolution failed for $host"
+      elif [[ -x "$(command -v nslookup)" ]]; then
+        # If nslookup exists
+        nslookup "$host" > /dev/null 2>&1 && echo "DNS resolution successful for $host" || echo "DNS resolution failed for $host"
+      elif [[ -x "$(command -v getent)" ]]; then
+        # If getent exists
+        getent hosts "$host" > /dev/null 2>&1 && echo "DNS resolution successful for $host" || echo "DNS resolution failed for $host"
+      else
+        # Fallback to a basic socket connection test using bash
+        echo "No DNS resolution tools available, testing basic connectivity"
+        (echo > /dev/tcp/$host/$CLICKHOUSE_PORT) >/dev/null 2>&1 && echo "Basic TCP connection successful to $host:$CLICKHOUSE_PORT" || echo "Basic TCP connection failed to $host:$CLICKHOUSE_PORT"
+      fi
+    }
+    
+    # Basic connection check without relying on external tools
+    basic_connection_check() {
+      local host=$1
+      local port=$2
+      
+      # Try basic socket connection using built-in bash capability
+      if (echo > /dev/tcp/$host/$port) >/dev/null 2>&1; then
+        echo "TCP connection successful to $host:$port"
+        return 0
+      else
+        echo "TCP connection failed to $host:$port"
+        return 1
+      fi
+    }
+    
+    # Function to run ClickHouse client with proper authentication
+    run_clickhouse_query() {
+      local query="$1"
+      local max_retries=3
+      local retry_count=0
+      local success=false
+      
+      while [[ $retry_count -lt $max_retries && $success == false ]]; do
+        if (( retry_count > 0 )); then
+          echo "Retry attempt $retry_count..."
+          sleep 2
+        fi
+        
+        if clickhouse-client \
+          --host "$CLICKHOUSE_HOST" \
+          --port "$CLICKHOUSE_PORT" \
+          --user "$CLICKHOUSE_USER" \
+          --password "$CLICKHOUSE_PASSWORD" \
+          --query "$query"; then
+          success=true
+        else
+          echo "Query failed with status $?"
+          retry_count=$((retry_count + 1))
+        fi
+      done
+      
+      if [[ $success == false ]]; then
+        echo "Failed to execute query after $max_retries attempts"
+        return 1
+      fi
+      
+      return 0
+    }
+    
+    # Check if ClickHouse server is available
+    echo "Testing connection to ClickHouse server..."
+    if ! run_clickhouse_query "SELECT 1"; then
+      echo "ERROR: Cannot connect to ClickHouse server"
+      echo "Checking if server is reachable..."
+      
+      # Try DNS resolution
+      check_host "$CLICKHOUSE_HOST"
+      
+      # Try fallback to service name
+      CLICKHOUSE_HOST="{{ include "clickhouse.serverName" . }}"
+      echo "Trying with service name: $CLICKHOUSE_HOST"
+      if run_clickhouse_query "SELECT 1"; then
+        echo "Connection successful with service name!"
+      else
+        echo "Connection still failed with service name, exiting"
+        exit 1
+      fi
+    fi
+    
+    # Verify the backup disk exists
+    echo "Checking if backups_disk is configured..."
+    if ! run_clickhouse_query "SELECT name FROM system.disks WHERE name = 'backups_disk'"; then
+      echo "ERROR: backups_disk is not configured in ClickHouse"
+      # List available disks
+      echo "Available disks:"
+      run_clickhouse_query "SELECT name FROM system.disks"
+      exit 1
+    fi
+    
+    echo "===== Starting ClickHouse Backup ====="
+    echo "Backup name: $BACKUP_NAME"
+    echo "Time: $(date)"
+    
+    # Create the backup command with proper EXCEPT syntax
+    backup_cmd="BACKUP ALL"
+    
+    # Add EXCEPT clause if there are databases to exclude
+    if [ ${#EXCLUDE_DATABASES[@]} -gt 0 ]; then
+      backup_cmd="${backup_cmd} EXCEPT "
+      
+      # Process each excluded database
+      exclude_count=0
+      for db in "${EXCLUDE_DATABASES[@]}"; do
+        if [ $exclude_count -gt 0 ]; then
+          backup_cmd="${backup_cmd}, "
+        fi
+        backup_cmd="${backup_cmd}DATABASE $db"
+        exclude_count=$((exclude_count + 1))
+      done
+    fi
+    
+    # Add the destination and settings
+    backup_cmd="${backup_cmd} TO Disk('backups_disk', '$BACKUP_DIR/$BACKUP_NAME') SETTINGS compression_method='$COMPRESSION', compression_level=$COMPRESSION_LEVEL"
+    
+    echo "Executing backup command:"
+    echo "$backup_cmd"
+    
+    # Execute the backup command
+    if run_clickhouse_query "$backup_cmd"; then
+      echo "Backup completed successfully"
+    else
+      echo "ERROR: Backup failed"
+      exit 1
+    fi
+    
+    # Cleanup old backups if retention is enabled
+    if [ "$RETENTION_DAYS" -gt 0 ]; then
+      echo "Cleaning up backups older than $RETENTION_DAYS days"
+      cutoff_date=$(date -d "-$RETENTION_DAYS days" +%Y-%m-%d)
+      
+      echo "Cutoff date for backup retention: $cutoff_date"
+      
+      # Get a list of backup IDs and dates in a simple format
+      echo "Fetching backup list..."
+      
+      # This query outputs one backup per line: id\tYYYY-MM-DD
+      backup_query="SELECT id, toDate(event_time) AS backup_date FROM system.backup_log WHERE status = 'BACKUP_CREATED' FORMAT TSV"
+      
+      # Run the query and save results to a temporary file to avoid pipe issues
+      if ! run_clickhouse_query "$backup_query" > /tmp/backup_list.txt; then
+        echo "Error retrieving backup list, skipping cleanup"
+      else
+        echo "Processing backup list for cleanup..."
+        
+        # Read the file line by line
+        while IFS=$'\t' read -r backup_id backup_date; do
+          # Skip empty lines
+          if [ -z "$backup_id" ]; then
+            continue
+          fi
+          
+          echo "Found backup: ID=$backup_id, Date=$backup_date"
+          
+          # Compare dates
+          if [[ "$backup_date" < "$cutoff_date" ]]; then
+            echo "Backup from $backup_date is older than cutoff $cutoff_date"
+            echo "Attempting to remove backup $backup_id..."
+            
+            # Try to remove the backup
+            if run_clickhouse_query "SELECT removeBackup('$backup_id')"; then
+              echo "Successfully removed backup $backup_id"
+            else
+              echo "Failed to remove backup $backup_id"
+            fi
+          else
+            echo "Backup from $backup_date is within retention period, keeping"
+          fi
+        done < /tmp/backup_list.txt
+        
+        # Clean up
+        rm -f /tmp/backup_list.txt
+      fi
+    fi
+    
+    echo "===== Backup Completed Successfully ====="
+    echo "Time: $(date)"
+    echo "Backup stored in S3 via backups_disk at path: $BACKUP_DIR/$BACKUP_NAME"
+    
+    # Exit successfully
+    exit 0
+{{- end }} 

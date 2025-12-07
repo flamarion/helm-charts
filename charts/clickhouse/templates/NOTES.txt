@@ -1,0 +1,90 @@
+Thank you for installing {{ .Chart.Name }} - ClickHouse Distributed Cluster!
+
+Your ClickHouse installation consists of:
+1. ClickHouse Server: {{ .Values.clickhouse.replicas }} replicas in 1 shard
+2. ClickHouse Keeper: 3 node cluster for coordination
+
+To connect to ClickHouse server:
+
+1. Use the following DNS names for internal cluster access:
+   - ClickHouse Server: {{ include "clickhouse.serverName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+   - ClickHouse Keeper: {{ include "clickhouse.keeperName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+
+2. Connect to ClickHouse using the configured credentials:
+   - Username: {{ .Values.auth.username }}
+   - Password: {{ .Values.auth.password }}
+
+3. Example connection command:
+   kubectl run clickhouse-client --rm -it --image=clickhouse/clickhouse-client -- \
+     --host={{ include "clickhouse.serverName" . }}.{{ .Release.Namespace }}.svc.cluster.local \
+     --port={{ .Values.clickhouse.service.ports.tcp }} \
+     --user={{ .Values.auth.username }} \
+     --password={{ .Values.auth.password }}
+
+4. Or using HTTP interface:
+   kubectl run curl-client --rm -it --image=curlimages/curl -- \
+     -X POST "http://{{ include "clickhouse.serverName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.clickhouse.service.ports.http }}" \
+     --user {{ .Values.auth.username }}:{{ .Values.auth.password }} \
+     -d "SELECT * FROM system.clusters"
+
+{{- if ne .Values.clickhouse.service.type "ClusterIP" }}
+You can also access ClickHouse from outside the cluster:
+
+{{- if eq .Values.clickhouse.service.type "LoadBalancer" }}
+  Get the external IP by running:
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "clickhouse.serverName" . }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  
+  Then connect using:
+  - HTTP: http://$SERVICE_IP:{{ .Values.clickhouse.service.ports.http }}
+  - Native: $SERVICE_IP:{{ .Values.clickhouse.service.ports.tcp }}
+{{- else if eq .Values.clickhouse.service.type "NodePort" }}
+  Get the node ports by running:
+  export HTTP_PORT=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "clickhouse.serverName" . }} -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+  export TCP_PORT=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "clickhouse.serverName" . }} -o jsonpath='{.spec.ports[?(@.name=="tcp")].nodePort}')
+  
+  Then connect using any node IP and these node ports.
+{{- end }}
+{{- end }}
+
+Service information for connecting from other applications:
+
+ClickHouse Server (for client applications):
+Service name: {{ include "clickhouse.serverName" . }}
+Namespace: {{ .Release.Namespace }}
+Full DNS: {{ include "clickhouse.serverName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+HTTP port: {{ .Values.clickhouse.service.ports.http }}
+TCP port: {{ .Values.clickhouse.service.ports.tcp }}
+   
+ClickHouse Keeper (for ClickHouse coordination):
+Service name: {{ include "clickhouse.keeperName" . }}
+Namespace: {{ .Release.Namespace }}
+Full DNS: {{ include "clickhouse.keeperName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+TCP port: {{ .Values.keeper.service.ports.keeper }} 
+
+{{- if .Values.backup.enabled }}
+Backup Configuration:
+
+1. Automated backups are configured with the following settings:
+   - Schedule: "{{ .Values.backup.schedule }}" (cron format)
+   - Retention: {{ .Values.backup.retentionDays }} days
+   - S3 Bucket: {{ .Values.backup.s3.bucket }}
+   - Backup Path: {{ .Values.backup.backupDirectory }}
+
+2. To run a manual backup:
+
+   kubectl create job --from=cronjob/{{ include "clickhouse.fullname" . }}-backup {{ include "clickhouse.fullname" . }}-backup-manual-$(date +%Y%m%d%H%M%S) -n {{ .Release.Namespace }}
+
+3. To view backup logs:
+
+   kubectl logs jobs/{{ include "clickhouse.fullname" . }}-backup-manual-XXXXXXXXXX -n {{ .Release.Namespace }}
+
+4. About the backup process:
+   - Backups are created using the BACKUP ALL command on a single replica
+   {{- if .Values.backup.excludeDatabases }}
+   - The following databases are excluded: {{ join ", " .Values.backup.excludeDatabases }}
+   {{- else }}
+   - All databases are included in the backup
+   {{- end }}
+   - Backups older than {{ .Values.backup.retentionDays }} days are automatically removed
+   - Backups use the {{ .Values.backup.parameters.compression }} compression method
+{{- end }}

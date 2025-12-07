@@ -1,0 +1,221 @@
+{{- include "clickhouse.validatePersistenceSize" . -}}
+{{- include "clickhouse.validateObjectStorage" . -}}
+{{- if .Values.backup.enabled -}}
+{{- include "clickhouse.validateBackup" . -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "clickhouse.serverName" . }}
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ .Values.clickhouse.replicas }}
+  podManagementPolicy: "Parallel"
+  selector:
+    matchLabels:
+      {{- include "clickhouse.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  serviceName: {{ include "clickhouse.serverName" . }}-headless
+  template:
+    metadata:
+      labels:
+        {{- include "clickhouse.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        # Add checksum annotation to ensure all pods restart when configuration changes
+        checksum/config: {{ include (print $.Template.BasePath "/clickhouse-configmap.yaml") . | sha256sum }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "clickhouse.serviceAccountName" . }}
+      {{- end }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken | default false }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.clickhouse.antiAffinity }}
+      affinity: 
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Wait for ClickHouse Keeper to be ready
+        - name: wait-for-keeper
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for ClickHouse Keeper service to be ready..."
+              until nc -z -w 1 {{ include "clickhouse.keeperName" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.keeper.service.ports.keeper }}; do
+                echo "Waiting for Keeper service to be available..."
+                sleep 2
+              done
+              echo "Successfully connected to Keeper service"
+        # Extract replica index
+        - name: init-clickhouse
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              POD_NAME=$(hostname)
+              # Extract the last part of the hostname after the last dash
+              REPLICA_INDEX=$(echo $POD_NAME | awk -F'-' '{print $NF}')
+              if [ -n "$REPLICA_INDEX" ] && [ "$REPLICA_INDEX" -eq "$REPLICA_INDEX" ] 2>/dev/null; then
+                echo "Extracted REPLICA_INDEX: $REPLICA_INDEX"
+                echo $REPLICA_INDEX > /tmp/ch-data/replica-index
+              else
+                echo "Failed to extract index from pod name $POD_NAME"
+                exit 1
+              fi
+          volumeMounts:
+            - name: replica-index-data
+              mountPath: /tmp/ch-data
+      containers:
+        - name: clickhouse
+          image: "{{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.clickhouse.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- if .Values.clickhouse.objectStorage.enabled }}
+            - name: S3_ENDPOINT
+              value: {{ .Values.clickhouse.objectStorage.singleBucket.endpoint | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.clickhouse.objectStorage.singleBucket.bucket | quote }}
+            {{- end }}
+            {{- if .Values.backup.enabled }}
+            - name: S3_BACKUP_ENDPOINT
+              value: {{ .Values.backup.s3.endpoint | quote }}
+            - name: S3_BACKUP_BUCKET
+              value: {{ .Values.backup.s3.bucket | quote }}
+            {{- end }}
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              # Read the replica index from the file created by the init container
+              export REPLICA_INDEX=$(cat /tmp/ch-data/replica-index)
+              echo "Starting ClickHouse server with replica index: $REPLICA_INDEX"
+              {{- if .Values.clickhouse.objectStorage.enabled }}
+              # Set S3 endpoint environment variable with proper replica index
+              export S3_ENDPOINT="${S3_ENDPOINT}/${S3_BUCKET}/clickhouse-$REPLICA_INDEX"
+              echo "Using S3 endpoint: $S3_ENDPOINT"
+              {{- end }}
+              {{- if .Values.backup.enabled }}
+              # Set S3 backup endpoint environment variable with proper replica index
+              export S3_BACKUP_ENDPOINT="${S3_BACKUP_ENDPOINT}/${S3_BACKUP_BUCKET}"
+              echo "Using S3 backup endpoint: $S3_BACKUP_ENDPOINT"
+              {{- end }}
+              exec /usr/bin/clickhouse-server --config=/etc/clickhouse-server/config.xml
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/clickhouse-server/config.d/clickhouse.xml
+              subPath: clickhouse-config.xml
+              readOnly: true
+            - name: users-config
+              mountPath: /etc/clickhouse-server/users.d/clickhouse-users.xml
+              subPath: users.xml
+              readOnly: true
+            {{- if .Values.clickhouse.objectStorage.enabled }}
+            - name: storage-config
+              mountPath: /etc/clickhouse-server/config.d/storage_config.xml
+              subPath: storage_config.xml
+              readOnly: true
+            {{- end }}
+            {{- if .Values.backup.enabled }}
+            - name: backup-config
+              mountPath: /etc/clickhouse-server/config.d/backup_disk_config.xml
+              subPath: backup_disk_config.xml
+              readOnly: true
+            {{- end }}
+            - name: data
+              mountPath: /var/lib/clickhouse
+              readOnly: false
+            - name: data
+              mountPath: /var/log/clickhouse-server
+              readOnly: false
+            - name: replica-index-data
+              mountPath: /tmp/ch-data
+          resources:
+            {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.clickhouse.service.ports.http }}
+            - name: tcp
+              containerPort: {{ .Values.clickhouse.service.ports.tcp }}
+            - name: intrsrvhttp
+              containerPort: {{ .Values.clickhouse.service.ports.intrsrvhttp }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 3
+            successThreshold: 1
+            timeoutSeconds: 2
+            tcpSocket:
+              port: http
+          readinessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 3
+            successThreshold: 1
+            timeoutSeconds: 2
+            httpGet:
+              path: /ping
+              port: http
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "clickhouse.serverName" . }}-config
+        - name: users-config
+          configMap:
+            name: {{ include "clickhouse.serverName" . }}-users-config
+        {{- if .Values.clickhouse.objectStorage.enabled }}
+        - name: storage-config
+          configMap:
+            name: {{ include "clickhouse.serverName" . }}-storage-config
+        {{- end }}
+        {{- if .Values.backup.enabled }}
+        - name: backup-config
+          configMap:
+            name: {{ include "clickhouse.serverName" . }}-backup-config
+        {{- end }}
+        - name: replica-index-data
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- range .Values.clickhouse.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- if .Values.clickhouse.persistence.storageClassName }}
+        storageClassName: {{ .Values.clickhouse.persistence.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.clickhouse.persistence.size }} 

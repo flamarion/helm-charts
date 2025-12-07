@@ -6,10 +6,33 @@ Welcome! This repository contains a collection of Helm charts that I've created 
 
 Charts are stored in the `charts/` directory. Each chart includes its own documentation and default `values.yaml`.
 
-| Chart Name   | Description                          | Status   |
-|--------------|--------------------------------------|----------|
+| Chart Name   | Description                                                                    | Version | Status       |
+|--------------|--------------------------------------------------------------------------------|---------|--------------|
+| clickhouse   | ClickHouse distributed database with ClickHouse Keeper for cluster coordination | 0.2.0   | ✅ Available |
 
 More charts will be added over time.
+
+### ClickHouse Chart
+
+A production-ready Helm chart for deploying ClickHouse clusters with built-in ClickHouse Keeper.
+
+**Key Features:**
+- 🔄 Single-shard, multi-replica architecture for high availability
+- 🗄️ Integrated ClickHouse Keeper (no external ZooKeeper needed)
+- ☁️ Optional S3-compatible object storage support
+- 💾 Automated backup and restore to S3
+- 📊 Prometheus metrics integration
+- 🔒 Configurable security contexts and RBAC
+- ⚙️ Highly configurable resource management
+
+**Quick Start:**
+```bash
+helm repo add flamarion-charts https://flamarion.github.io/helm-charts
+helm repo update
+helm install my-clickhouse flamarion-charts/clickhouse
+```
+
+See [charts/clickhouse/README.md](charts/clickhouse/README.md) for detailed documentation.
 
 ## 🚀 How to Use
 
