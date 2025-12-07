@@ -1,0 +1,40 @@
+# Test values for CI/CD pipeline
+# These values are optimized for running in a minimal kind cluster
+
+# Reduce resource requirements for testing
+clickhouse:
+  replicas: 2 # Reduced from 3 for faster testing
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  persistence:
+    size: 5Gi # Minimum size for testing
+    storageClassName: standard
+
+keeper:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+  persistence:
+    size: 1Gi
+    storageClassName: standard
+
+# Disable features that require external services
+backup:
+  enabled: false
+
+# Keep default authentication for testing
+auth:
+  username: "admin"
+  password: "test-password-123"

@@ -1,0 +1,27 @@
+# Configuration for chart-testing (ct)
+# https://github.com/helm/chart-testing
+
+# Directories containing charts
+chart-dirs:
+  - charts
+
+# Chart repositories to add for dependency resolution
+chart-repos: []
+
+# Helm version to use
+helm-version: v3.14.0
+
+# Additional Helm lint flags
+helm-lint-extra-args: --strict
+
+# Skip charts that have not changed
+check-version-increment: true
+
+# Validate maintainers in Chart.yaml
+validate-maintainers: false
+
+# Validate YAML files
+validate-yaml: true
+# Path to ct configuration file (this file)
+# config: .github/ct.yaml
+
