@@ -2,7 +2,7 @@
 
 [![Release Charts](https://github.com/flamarion/helm-charts/actions/workflows/release.yml/badge.svg)](https://github.com/flamarion/helm-charts/actions/workflows/release.yml)
 [![Lint and Test Charts](https://github.com/flamarion/helm-charts/actions/workflows/lint-test.yml/badge.svg)](https://github.com/flamarion/helm-charts/actions/workflows/lint-test.yml)
-[![License: CC BY-ND 4.0](https://img.shields.io/badge/License-CC%20BY--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nd/4.0/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 ![Helm: v3](https://img.shields.io/badge/Helm-v3-informational?logo=helm)
 
 **Production-ready Helm charts for self-hosted Kubernetes deployments**
@@ -108,16 +108,18 @@ Vote for charts you'd like to see in [Discussions](https://github.com/flamarion/
 
 ## 📜 License
 
-Shield: [![CC BY-ND 4.0][cc-by-nd-shield]][cc-by-nd]
+This project is licensed under the [Apache License 2.0](LICENSE).
 
-This work is licensed under a
-[Creative Commons Attribution-NoDerivs 4.0 International License][cc-by-nd].
+You are free to:
+- ✅ Use commercially
+- ✅ Modify
+- ✅ Distribute
+- ✅ Use privately
 
-[![CC BY-ND 4.0][cc-by-nd-image]][cc-by-nd]
-
-[cc-by-nd]: https://creativecommons.org/licenses/by-nd/4.0/
-[cc-by-nd-image]: https://licensebuttons.net/l/by-nd/4.0/88x31.png
-[cc-by-nd-shield]: https://img.shields.io/badge/License-CC%20BY--ND%204.0-lightgrey.svg
+Under the following terms:
+- 📝 Include a copy of the license and copyright notice
+- 📝 State significant changes made to the code
+- 🛡️ Provide attribution to the original author
 
 
 ## ⭐ Show Your Support

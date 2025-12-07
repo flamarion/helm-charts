@@ -222,7 +222,9 @@ Always increment the chart version in `Chart.yaml` when making changes.
 
 ## 📜 License
 
-By contributing, you agree that your contributions will be licensed under the same license as the project (CC BY-ND 4.0).
+By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](../LICENSE), the same license as the project.
+
+Your contributions must be your own original work or properly attributed third-party work compatible with Apache 2.0.
 
 ## ❓ Questions?
 
