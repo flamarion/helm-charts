@@ -1,0 +1,182 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.serverName" . }}-config
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+data:
+  clickhouse-config.xml: |-
+    <?xml version="1.0"?>
+    <clickhouse>
+        <logger>
+            <level>{{ .Values.logLevel }}</level>
+            <console>true</console>
+            <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+            <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+            <size>1000M</size>
+            <count>3</count>
+        </logger>
+
+        <http_port>{{ .Values.clickhouse.service.ports.http }}</http_port>
+        <tcp_port>{{ .Values.clickhouse.service.ports.tcp }}</tcp_port>
+        <interserver_http_port>{{ .Values.clickhouse.service.ports.intrsrvhttp }}</interserver_http_port>
+
+        <!-- Network configuration -->
+        <listen_host>0.0.0.0</listen_host>
+        <interserver_listen_host>0.0.0.0</interserver_listen_host>
+
+        <!-- Path configuration -->
+        <path>/var/lib/clickhouse/</path>
+        <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+        <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+        <format_schema_path>/var/lib/clickhouse/format_schemas/</format_schema_path>
+
+        <!-- Cluster configuration with single shard and multiple replicas -->
+        <remote_servers>
+            <{{ .Values.clusterName }}>
+                <shard>
+                    <internal_replication>true</internal_replication>
+                    {{- $serverName := include "clickhouse.serverName" . }}
+                    {{- include "clickhouse.replicaXmlBlock" (list $serverName .Values.clickhouse.service.ports.tcp .Release.Namespace (int .Values.clickhouse.replicas)) }}
+                </shard>
+            </{{ .Values.clusterName }}>
+        </remote_servers>
+
+        <!-- Macros for replica identification -->
+        <macros>
+            <shard>01</shard>
+            <replica from_env="REPLICA_INDEX" />
+            <cluster>{{ .Values.clusterName }}</cluster>
+        </macros>
+
+        <!-- ZooKeeper/Keeper configuration -->
+        <zookeeper>
+            {{- $keeperName := include "clickhouse.keeperName" . }}
+            {{- include "clickhouse.zookeeperNodeXmlBlock" (list $keeperName .Values.keeper.service.ports.keeper .Release.Namespace 3) }}
+        </zookeeper>
+
+        <!-- Metrics and monitoring -->
+        {{- if .Values.metrics.enabled }}
+        <prometheus>
+            <endpoint>/metrics</endpoint>
+            <port>{{ .Values.metrics.port }}</port>
+            <metrics>true</metrics>
+            <events>true</events>
+            <asynchronous_metrics>true</asynchronous_metrics>
+        </prometheus>
+        {{- end }}
+    </clickhouse>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.serverName" . }}-users-config
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+data:
+  users.xml: |-
+    <?xml version="1.0"?>
+    <clickhouse>
+        <users>
+            <{{ .Values.auth.username }}>
+                <password>{{ .Values.auth.password }}</password>
+                <profile>default</profile>
+                <networks>
+                    <ip>::/0</ip>
+                </networks>
+                <quota>default</quota>
+                <access_management>1</access_management>
+            </{{ .Values.auth.username }}>
+        </users>
+        <profiles>
+            <default>
+                <max_memory_usage>10000000000</max_memory_usage>
+                <load_balancing>in_order</load_balancing>
+            </default>
+        </profiles>
+        <quotas>
+            <default>
+                <interval>
+                    <duration>3600</duration>
+                    <queries>0</queries>
+                    <errors>0</errors>
+                    <result_rows>0</result_rows>
+                    <read_rows>0</read_rows>
+                    <execution_time>0</execution_time>
+                </interval>
+            </default>
+        </quotas>
+    </clickhouse> 
+---
+{{- if .Values.clickhouse.objectStorage.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.serverName" . }}-storage-config
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+data:
+  storage_config.xml: |-
+    <?xml version="1.0"?>
+    <clickhouse>
+      <merge_tree>
+        <storage_policy>s3_main</storage_policy>
+      </merge_tree>
+      <storage_configuration>
+        <disks>
+          <s3_disk>
+            <type>{{ .Values.clickhouse.objectStorage.type }}</type>
+            {{- include "clickhouse.s3AuthConfig" . | nindent 12 }}
+            <metadata_path>/var/lib/clickhouse/disks/s3_disk/</metadata_path>
+          </s3_disk>
+          <s3_cache>
+            <type>cache</type>
+            <disk>s3_disk</disk>
+            <path>/var/lib/clickhouse/disks/s3_cache/</path>
+            {{- $cacheSizeBytes := mul (div (mul (trimSuffix "Gi" .Values.clickhouse.persistence.size | atoi) 95) 100) 1073741824 }}
+            <max_size>{{ $cacheSizeBytes }}</max_size>
+            <cache_on_write_operations>1</cache_on_write_operations>
+          </s3_cache>
+        </disks>
+        <policies>
+          <s3_main>
+            <volumes>
+              <main>
+                <disk>s3_cache</disk>
+              </main>
+            </volumes>
+          </s3_main>
+        </policies>
+      </storage_configuration>
+    </clickhouse>
+{{- end }}
+---
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.serverName" . }}-backup-config
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+data:
+  backup_disk_config.xml: |-
+    <?xml version="1.0"?>
+    <clickhouse>
+      <storage_configuration>
+        <disks>
+          <backups_disk>
+            <type>s3_plain</type>
+            {{- include "clickhouse.s3BackupAuthConfig" . | nindent 12 }}
+            <metadata_path>/var/lib/clickhouse/disks/backups_disk/</metadata_path>
+          </backups_disk>
+        </disks>
+      </storage_configuration>
+      <backups>
+        <allowed_disk>backups_disk</allowed_disk>
+      </backups>
+    </clickhouse>
+{{- end }} 

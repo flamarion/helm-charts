@@ -1,0 +1,198 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "clickhouse.keeperName" . }}
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keeper
+spec:
+  replicas: 3
+  podManagementPolicy: "Parallel"
+  selector:
+    matchLabels:
+      {{- include "clickhouse.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: keeper
+  serviceName: {{ include "clickhouse.keeperName" . }}-headless
+  template:
+    metadata:
+      labels:
+        {{- include "clickhouse.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: keeper
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        # Add checksum annotation to ensure all pods restart when configuration changes
+        checksum/config: {{ include (print $.Template.BasePath "/keeper-configmap.yaml") . | sha256sum }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "clickhouse.serviceAccountName" . }}
+      {{- end }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken | default false }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.keeper.antiAffinity }}
+      affinity: 
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: init-keeper
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Step 1: Extract keeper ID from hostname
+              POD_NAME=$(hostname)
+              # Extract the last part of the hostname after the last dash
+              KEEPER_ID=$(echo $POD_NAME | awk -F'-' '{print $NF}')
+              if [ -n "$KEEPER_ID" ] && [ "$KEEPER_ID" -eq "$KEEPER_ID" ] 2>/dev/null; then
+                echo "Extracted KEEPER_ID: $KEEPER_ID"
+                echo $KEEPER_ID > /tmp/keeper-data/keeper-id
+              else
+                echo "Failed to extract index from pod name $POD_NAME"
+                exit 1
+              fi
+              
+              # Step 2: Wait for DNS resolution
+              echo "Waiting for DNS resolution of other keeper nodes..."
+              # Try to resolve hostnames of all nodes
+              for i in 0 1 2; do
+                # Skip waiting for our own hostname
+                if [ "$i" == "$KEEPER_ID" ]; then
+                  continue
+                fi
+                
+                hostname="{{ include "clickhouse.keeperName" . }}-$i.{{ include "clickhouse.keeperName" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local"
+                echo "Checking DNS for $hostname"
+                
+                for retry in $(seq 1 15); do
+                  if nslookup $hostname > /dev/null 2>&1; then
+                    echo "Successfully resolved $hostname"
+                    break
+                  fi
+                  
+                  if [ $retry -eq 15 ]; then
+                    echo "Failed to resolve $hostname after 15 attempts, continuing anyway"
+                  fi
+                  
+                  echo "Waiting for DNS to resolve $hostname... (attempt $retry/15)"
+                  sleep 1
+                done
+              done
+              
+              # Display debugging info
+              echo "Current network configuration:"
+              ip addr
+              echo "Current DNS configuration:"
+              cat /etc/resolv.conf
+              echo "Attempting to resolve service:"
+              nslookup {{ include "clickhouse.keeperName" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local || true
+              
+              echo "DNS resolution and initialization completed"
+          volumeMounts:
+            - name: keeper-id-data
+              mountPath: /tmp/keeper-data
+      containers:
+        - name: keeper
+          image: "{{ .Values.keeper.image.repository }}:{{ .Values.keeper.image.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.keeper.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              # Read the keeper ID from the file created by the init container
+              export KEEPER_SERVER_ID=$(cat /tmp/keeper-data/keeper-id)
+              echo "Starting keeper with server ID: $KEEPER_SERVER_ID"
+              exec /usr/bin/clickhouse-keeper --config=/etc/clickhouse-keeper/keeper_config.xml
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/clickhouse-keeper/keeper_config.xml
+              subPath: keeper-config.xml
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/clickhouse
+              readOnly: false
+            - name: data
+              mountPath: /var/lib/clickhouse-keeper
+              readOnly: false
+            - name: data
+              mountPath: /var/log/clickhouse-keeper
+              readOnly: false
+            - name: keeper-id-data
+              mountPath: /tmp/keeper-data
+          resources:
+            {{- toYaml .Values.keeper.resources | nindent 12 }}
+          ports:
+            - name: keeper
+              containerPort: {{ .Values.keeper.service.ports.keeper }}
+            - name: raft
+              containerPort: {{ .Values.keeper.service.ports.raft }}
+            - name: http
+              containerPort: {{ .Values.keeper.service.ports.http }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          startupProbe:
+            failureThreshold: 15
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+            tcpSocket:
+              port: keeper
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+            tcpSocket:
+              port: keeper
+          readinessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+            tcpSocket:
+              port: keeper
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "clickhouse.keeperName" . }}-config
+        - name: keeper-id-data
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- range .Values.keeper.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- if .Values.keeper.persistence.storageClassName }}
+        storageClassName: {{ .Values.keeper.persistence.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.keeper.persistence.size }} 

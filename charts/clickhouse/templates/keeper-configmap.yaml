@@ -1,0 +1,58 @@
+{{- $keeperName := include "clickhouse.keeperName" . -}}
+{{- $namespace := .Release.Namespace -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.keeperName" . }}-config
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keeper
+data:
+  keeper-config.xml: |-
+    <clickhouse>
+      <logger>
+        <level>{{ .Values.logLevel }}</level>
+        <console>true</console>
+        <log>/var/log/clickhouse-keeper/clickhouse-keeper.log</log>
+        <errorlog>/var/log/clickhouse-keeper/clickhouse-keeper.err.log</errorlog>
+      </logger>
+
+      <keeper_server>
+        <tcp_port>{{ .Values.keeper.service.ports.keeper }}</tcp_port>
+        <server_id from_env="KEEPER_SERVER_ID"/>
+        <log_storage_path>/var/lib/clickhouse-keeper/coordination/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse-keeper/coordination/snapshots</snapshot_storage_path>
+
+        <coordination_settings>
+          <operation_timeout_ms>{{ .Values.keeper.coordinationSettings.operationTimeoutMs }}</operation_timeout_ms>
+          <session_timeout_ms>{{ .Values.keeper.coordinationSettings.sessionTimeoutMs }}</session_timeout_ms>
+          <raft_logs_level>{{ .Values.logLevel }}</raft_logs_level>
+        </coordination_settings>
+
+        <raft_configuration>
+          {{- $keeperName := include "clickhouse.keeperName" . }}
+          {{- include "clickhouse.serverXmlBlock" (list $keeperName .Values.keeper.service.ports.raft .Release.Namespace 3) }}
+        </raft_configuration>
+      </keeper_server>
+
+      <!-- HTTP server config -->
+      <http_port>{{ .Values.keeper.service.ports.http }}</http_port>
+      <listen_host>0.0.0.0</listen_host>
+      
+      <!-- HTTP control interface config -->
+      <http_control_interface>
+        <port>{{ .Values.keeper.service.ports.http }}</port>
+        <readonly>0</readonly>
+      </http_control_interface>
+
+      {{- if .Values.metrics.enabled }}
+      <!-- Prometheus metrics -->
+      <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>{{ .Values.metrics.port }}</port>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+      </prometheus>
+      {{- end }}
+    </clickhouse> 

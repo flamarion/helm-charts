@@ -1,0 +1,260 @@
+# Default values for clickhouse
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Cluster name used by both ClickHouse Server and Keeper
+clusterName: "clickhouse_cluster"
+
+# Log level: trace, debug, information, warning, error
+logLevel: "information"
+
+# Metrics and monitoring configuration
+metrics:
+  # Enable Prometheus metrics
+  enabled: false
+  # Port for Prometheus metrics
+  port: 9363
+  # Path for Prometheus metrics
+  path: "/metrics"
+
+# ClickHouse authentication
+auth:
+  username: "admin"
+  password: "changeme"
+
+# Service account configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+  automountToken: false
+
+# Pod annotations applied to all pods
+podAnnotations: {}
+
+# Basic pod security context for standard Kubernetes
+podSecurityContext: {}
+  # fsGroup: 101
+  # runAsNonRoot: true
+  # runAsUser: 101
+  # runAsGroup: 101
+
+# Basic container security context for standard Kubernetes
+# Note: For ClickHouse thread scheduling optimization, you may want to add the SYS_NICE capability.
+# If you see a warning about "no CAP_SYS_NICE capability" and want to optimize thread scheduling,
+# modify the capabilities section to:
+#   capabilities:
+#     add:
+#       - SYS_NICE
+#     drop:
+#       - NET_RAW
+#       - NET_ADMIN
+#       - SETUID
+#       - SETGID
+#       - AUDIT_WRITE
+#       - MKNOD
+#       - AUDIT_CONTROL
+#       - KILL
+securityContext: {}
+  # allowPrivilegeEscalation: false
+  # capabilities:
+  #   drop:
+  #     - ALL
+  # readOnlyRootFilesystem: false
+  # runAsNonRoot: true
+  # runAsUser: 101
+  # runAsGroup: 101
+
+# Node selectors for all pods
+nodeSelector: {}
+
+# Tolerations for all pods
+tolerations: []
+
+# Affinity for all pods
+affinity: {}
+
+# ClickHouse server configuration
+clickhouse:
+  # ClickHouse server image
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "25.3.2"
+    pullPolicy: IfNotPresent
+
+  # Single shard with multiple replicas
+  replicas: 3
+
+  # Anti-affinity settings to distribute server pods
+  # Example to enable anti-affinity:
+  # antiAffinity:
+  #   podAntiAffinity:
+  #     preferredDuringSchedulingIgnoredDuringExecution:
+  #     - weight: 100
+  #       podAffinityTerm:
+  #         labelSelector:
+  #           matchLabels:
+  #             app.kubernetes.io/component: server
+  #         topologyKey: "kubernetes.io/hostname"
+  antiAffinity: {}
+
+  # Object storage configuration
+  objectStorage:
+    enabled: false
+    # Currently only "s3" type is supported (AWS S3 and S3-compatible storage like MinIO)
+    type: "s3"
+    singleBucket:
+      enabled: true
+      endpoint: ""
+      bucket: ""
+      # Auth methods are mutually exclusive - use either credentials or IAM
+      auth:
+        # Direct credentials authentication
+        credentials:
+          enabled: true
+          accessKeyId: ""
+          secretAccessKey: ""
+        # IAM authentication (for cloud provider managed identities)
+        useIam:
+          enabled: false
+          # Required when using IAM authentication
+          region: ""
+
+  service:
+    # Service type for the non-headless service (ClusterIP, NodePort, LoadBalancer)
+    # A headless service is always created separately for StatefulSet DNS
+    type: ClusterIP
+    ports:
+      http: 8123
+      tcp: 9000
+      intrsrvhttp: 9009
+
+  # Resource requirements for ClickHouse server
+  resources:
+    limits:
+      cpu: 2
+      memory: 8Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+  # Storage persistence configuration
+  persistence:
+    size: 30Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+
+# ClickHouse Keeper configuration
+keeper:
+  # ClickHouse Keeper image
+  image:
+    repository: clickhouse/clickhouse-keeper
+    tag: "25.3.2"
+    pullPolicy: IfNotPresent
+
+  # Coordinate service settings
+  coordinationSettings:
+    operationTimeoutMs: 10000
+    sessionTimeoutMs: 30000
+
+  # Anti-affinity settings to distribute keeper pods
+  # Example to enable anti-affinity:
+  # antiAffinity:
+  #   podAntiAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #     - labelSelector:
+  #         matchLabels:
+  #           app.kubernetes.io/component: keeper
+  #       topologyKey: "kubernetes.io/hostname"
+  antiAffinity: {}
+
+  service:
+    # Service type for the non-headless service (ClusterIP, NodePort, LoadBalancer)
+    # A headless service is always created separately for StatefulSet DNS
+    type: ClusterIP
+    ports:
+      keeper: 9181
+      http: 9182
+      raft: 9234
+
+  # Resource requirements for Keeper
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  persistence:
+    size: 5Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+
+# Scheduled and on-demand backup configuration
+backup:
+  # Enable both backup disk and scheduled backups
+  # IMPORTANT: The backup disk should be used ONLY for BACKUP/RESTORE operations, not for MergeTree tables
+  # IMPORTANT: The backup bucket should be different from the object storage bucket to avoid conflicts
+  enabled: false
+
+  # Image for backup container
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "25.3.2"
+    pullPolicy: IfNotPresent
+
+  # S3 configuration for backup disk and backups
+  s3:
+    bucket: ""
+    endpoint: ""
+    # Auth methods are mutually exclusive - use either credentials or IAM
+    auth:
+      # Direct credentials authentication
+      credentials:
+        enabled: true
+        accessKeyId: ""
+        secretAccessKey: ""
+      # IAM authentication (for cloud provider managed identities)
+      useIam:
+        enabled: false
+        # Required when using IAM authentication
+        region: ""
+
+  # Schedule for automatic backups using cron syntax
+  schedule: "0 2 * * *" # Every day at 2 AM
+
+  # Keep backups for this many days (0 to keep forever)
+  retentionDays: 7
+
+  # Target directory or folder for backups in the S3 bucket
+  backupDirectory: "clickhouse-backups"
+
+  # Databases to exclude from the BACKUP ALL command
+  # Leave empty to backup all databases
+  excludeDatabases: []
+
+  # Additional parameters for backup/restore
+  parameters:
+    # Compression method: lz4, zstd (default), none
+    compression: "zstd"
+    # Compression level (higher = better compression but slower)
+    compressionLevel: 1
+
+  # Resource requirements for backup jobs
+  resources:
+    limits:
+      cpu: 1
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
