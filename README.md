@@ -44,6 +44,16 @@ helm repo update
 helm install my-release flamarion-charts/clickhouse
 ```
 
+## 🔄 Automated Releases
+
+This repository uses GitHub Actions to automatically test, package, and release charts:
+
+- **Lint & Test**: Every pull request is automatically tested
+- **Release**: Charts are automatically packaged and published when merged to `main`
+- **Versioning**: Follow [Semantic Versioning](https://semver.org/) in `Chart.yaml`
+
+See [RELEASE.md](RELEASE.md) for detailed release instructions.
+
 ## 🤝 Contributions
 
 These charts are built with my own workflows in mind, but suggestions and improvements are always welcome.  
